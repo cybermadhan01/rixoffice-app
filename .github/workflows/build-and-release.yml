@@ -1,0 +1,151 @@
+name: Build and Release Installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: 'Release Tag (e.g. v1.0.1)'
+        required: true
+        default: 'v1.0.1'
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: build-release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+          - os: ubuntu-22.04
+            platform: linux
+          - os: windows-latest
+            platform: win
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout private source repository
+        uses: actions/checkout@v4
+        with:
+          repository: cybermadhan01/rixoffice
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - name: Cache Cargo (xlsx-sidecar)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/sheets/native/xlsx-engine
+
+      - name: Install Linux packaging tools (rpm)
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm
+
+      - name: Install dependencies
+        run: npm install
+
+      # Windows: build the xlsx sidecar
+      - name: Build Windows sidecar
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          npm run native:build -w @rixoffice/sheets
+          $src = "apps/sheets/native/xlsx-engine/target/release/xlsx-sidecar.exe"
+          $dst = "apps/sheets/native/xlsx-engine/target/x86_64-pc-windows-gnu/release"
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          Copy-Item $src (Join-Path $dst "xlsx-sidecar.exe") -Force
+
+      # macOS: lipo fat sidecar
+      - name: Build macOS universal sidecar
+        if: matrix.platform == 'mac'
+        run: npm run native:build:universal -w @rixoffice/sheets
+
+      # Linux: host-native sidecar
+      - name: Build Linux sidecar
+        if: matrix.platform == 'linux'
+        run: npm run native:build -w @rixoffice/sheets
+
+      - name: Build macOS package
+        if: matrix.platform == 'mac'
+        run: npm run dist:mac
+
+      - name: Build Linux package
+        if: matrix.platform == 'linux'
+        run: npm run dist:linux
+
+      - name: Build Windows package
+        if: matrix.platform == 'win'
+        run: npm run dist:win
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rixoffice-Installers-${{ matrix.os }}
+          path: |
+            apps/shell/release/*.exe
+            apps/shell/release/*.dmg
+            apps/shell/release/*.zip
+            apps/shell/release/*.AppImage
+            apps/shell/release/*.deb
+            apps/shell/release/*.rpm
+            apps/shell/release/latest*.yml
+          retention-days: 7
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Determine Release Tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "RELEASE_TAG=${{ github.event.inputs.version_tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "RELEASE_TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download all installer artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.RELEASE_TAG }}
+          name: Rixoffice ${{ steps.tag.outputs.RELEASE_TAG }}
+          files: |
+            installers/*.exe
+            installers/*.dmg
+            installers/*.zip
+            installers/*.AppImage
+            installers/*.deb
+            installers/*.rpm
+            installers/latest*.yml
+          generate_release_notes: true
+          draft: false
+          prerelease: false
