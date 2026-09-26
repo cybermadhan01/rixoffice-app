@@ -32,6 +32,8 @@ jobs:
             platform: win
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - name: Checkout private source repository
