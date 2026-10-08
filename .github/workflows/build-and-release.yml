@@ -98,6 +98,8 @@ jobs:
 
       - name: Build Windows package
         if: matrix.platform == 'win'
+        env:
+          RIXOFFICE_STORE_BUILD: '1'
         run: npm run dist:win
 
       - name: Upload installer artifacts
@@ -106,6 +108,7 @@ jobs:
           name: Rixoffice-Installers-${{ matrix.os }}
           path: |
             apps/shell/release/*.exe
+            apps/shell/release/*.appx
             apps/shell/release/*.dmg
             apps/shell/release/*.zip
             apps/shell/release/*.AppImage
@@ -142,6 +145,7 @@ jobs:
           name: Rixoffice ${{ steps.tag.outputs.RELEASE_TAG }}
           files: |
             installers/*.exe
+            installers/*.appx
             installers/*.dmg
             installers/*.zip
             installers/*.AppImage
